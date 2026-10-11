@@ -1,0 +1,23 @@
+
+# Local environment configuration
+config/*.env
+!config/*.env.example
+
+# Secrets and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# AWS credentials
+.aws/
+credentials
+config
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
