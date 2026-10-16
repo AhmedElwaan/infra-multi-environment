@@ -14,6 +14,7 @@ create_vpc(){
         existing_vpc_id=$(aws ec2 describe-vpcs \
         --region "$REGION" \
         --filters "Name=cidr,Values=${CIDR}" \
+                "Name=tag:Name,Values=${VPC_NAME}" \
         --query 'Vpcs[0].VpcId' \
         --output text)
 

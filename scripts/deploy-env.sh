@@ -25,6 +25,8 @@ config_path="$(dirname "${BASH_SOURCE[0]}")/../config/$config_file"
 
 source "$config_path"
 source "$(dirname "${BASH_SOURCE[0]}")/network.sh"
+echo "-----------------------------------------------------------------------------------------"
+source "$(dirname "${BASH_SOURCE[0]}")/security.sh"
 
 echo "-----------------------------------------------------------------------------------------"
 echo "Configuration deployed successfully."
