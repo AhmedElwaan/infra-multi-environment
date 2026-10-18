@@ -56,8 +56,6 @@ create_security_group(){
 
 #====================================================================================================#
 
-
-
 add_security_group_rule(){
     
     #Arguments
@@ -80,7 +78,7 @@ add_security_group_rule(){
         
         # Reject malformed ranges containing multiple hyphens.
         if [[ "$to_port" == *-* ]]; then
-            echo "ERROR: Invalid port range: $port_spec" >&2
+            echo "ERROR: Invalid port range: $port_range" >&2
             return 1
         fi
     else
@@ -162,4 +160,186 @@ add_security_group_rule(){
 
 }
 
+#====================================================================================================#
 
+create_nacl() {
+
+    # Arguments
+    local nacl_name="$1"
+
+    # Variables
+    local existing_nacl_id
+
+    echo "Checking if Network ACL '$nacl_name' already exists in VPC '$vpc_id'..."
+
+    # Check if the NACL already exists in this VPC
+    existing_nacl_id=$(aws ec2 describe-network-acls \
+        --filters \
+            "Name=vpc-id,Values=${vpc_id}" \
+            "Name=tag:Name,Values=${nacl_name}" \
+        --query 'NetworkAcls[0].NetworkAclId' \
+        --output text \
+        --region "$REGION")
+
+    # Reuse the existing NACL if found
+    if [[ "$existing_nacl_id" != "None" && -n "$existing_nacl_id" ]]; then
+        echo "Network ACL '$nacl_name' already exists: $existing_nacl_id"
+        nacl_id="$existing_nacl_id"
+        return 0
+    fi
+
+    # Create a new NACL
+    echo "Creating Network ACL '$nacl_name'..."
+
+    if ! nacl_id=$(aws ec2 create-network-acl \
+        --vpc-id "$vpc_id" \
+        --query 'NetworkAcl.NetworkAclId' \
+        --output text \
+        --region "$REGION"); then
+
+        echo "ERROR: Failed to create Network ACL '$nacl_name'" >&2
+        return 1
+    fi
+
+    if [[ -z "$nacl_id" || "$nacl_id" == "None" ]]; then
+        echo "ERROR: AWS returned an invalid NACL ID" >&2
+        return 1
+    fi
+
+    aws ec2 create-tags \
+    --resources "$nacl_id" \
+    --tags "Key=Name,Value=${nacl_name}" \
+    --region "$REGION"
+
+    echo "Network ACL created successfully: $nacl_id"
+}
+
+#====================================================================================================#
+
+add_nacl_rule() {
+
+    # Arguments
+    local type="$1"
+    local rule_number="$2"
+    local protocol="$3"
+    local port_range="$4"
+    local cidr="$5"
+    local action="$6"
+
+    # Variables
+    local from_port
+    local to_port
+
+    # Parse a single port or a range
+    if [[ "$port_range" == *-* ]]; then
+        
+        from_port="${port_range%-*}"
+        to_port="${port_range#*-}"
+        
+        # Reject malformed ranges containing multiple hyphens.
+        if [[ "$to_port" == *-* ]]; then
+            echo "ERROR: Invalid port range: $port_range" >&2
+            return 1
+        fi
+    else
+        from_port="$port_range"
+        to_port="$port_range"
+    fi
+    
+    
+    # Ensure both values contain only decimal digits.
+    if [[ ! "$from_port" =~ ^[0-9]+$ || ! "$to_port" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Ports must be integers." >&2
+        return 1
+    fi
+
+    # Ensure both ports are within the valid range.
+    if (( from_port < 0 || from_port > 65535 || to_port < 0 || to_port > 65535 )); then
+        echo "ERROR: Ports must be between 0 and 65535." >&2
+        return 1
+    fi
+
+    # Ensure the starting port does not exceed the ending port.
+    if (( from_port > to_port )); then
+        echo "ERROR: Starting port must not exceed ending port." >&2
+        return 1
+    fi
+
+    # Validate direction
+    if [[ "$type" != "ingress" && "$type" != "egress" ]]; then
+        echo "ERROR: Type must be ingress or egress" >&2
+        return 1
+    fi
+
+    echo "Adding $type rule $rule_number to NACL '$nacl_id'..."
+
+    # Create NACL rule
+    if ! aws ec2 create-network-acl-entry \
+        --network-acl-id "$nacl_id" \
+        "--$type" \
+        --rule-number "$rule_number" \
+        --protocol "$protocol" \
+        --port-range "From=${from_port},To=${to_port}" \
+        --cidr-block "$cidr" \
+        --rule-action "$action" \
+        --region "$REGION"; then
+
+        echo "ERROR: Failed to add $type rule $rule_number" >&2
+        return 1
+    fi
+
+    echo "$type rule $rule_number added successfully."
+}
+
+#====================================================================================================#
+
+associate_nacl_with_subnet() {
+
+    # Arguments
+    local nacl_id="$1"
+    local subnet_id="$2"
+
+    # Variables
+    local current_nacl_id
+
+    echo "Checking NACL association for subnet '$subnet_id'..."
+
+    # Find the NACL currently associated with this subnet
+    if ! current_nacl_id=$(aws ec2 describe-network-acls \
+        --filters "Name=association.subnet-id,Values=${subnet_id}" \
+        --query 'NetworkAcls[0].NetworkAclId' \
+        --output text \
+        --region "$REGION"); then
+
+        echo "ERROR: Failed to check the subnet's NACL association" >&2
+        return 1
+    fi
+
+    # Skip if the desired NACL is already associated
+    if [[ "$current_nacl_id" == "$nacl_id" ]]; then
+        echo "Subnet '$subnet_id' is already associated with NACL '$nacl_id'."
+        return 0
+    fi
+
+    # Associate the subnet with the requested NACL
+    echo "Associating subnet '$subnet_id' with NACL '$nacl_id'..."
+
+    if ! aws ec2 associate-network-acl \
+        --network-acl-id "$nacl_id" \
+        --subnet-id "$subnet_id" \
+        --region "$REGION"; then
+
+        echo "ERROR: Failed to associate NACL '$nacl_id' with subnet '$subnet_id'" >&2
+        return 1
+    fi
+
+    echo "Subnet '$subnet_id' associated successfully with NACL '$nacl_id'."
+}
+
+#--------------------------Functions Call---------------------------
+
+create_security_group "$SECURITY_GROUP_NAME" "$SECURITY_GROUP_DESCRIPTION"
+add_security_group_rule "ingress" "$INBOUND_PROTOCOL" "$INBOUND_PORTS" "$INBOUND_CIDR" "$INBOUND_DESCRIPTION"
+add_security_group_rule "egress" "$OUTBOUND_PROTOCOL" "$OUTBOUND_PORTS" "$OUTBOUND_CIDR" "$OUTBOUND_DESCRIPTION"
+
+create_nacl "$NACL_NAME"
