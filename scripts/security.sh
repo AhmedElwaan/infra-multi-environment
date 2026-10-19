@@ -338,8 +338,59 @@ associate_nacl_with_subnet() {
 
 #--------------------------Functions Call---------------------------
 
-create_security_group "$SECURITY_GROUP_NAME" "$SECURITY_GROUP_DESCRIPTION"
-add_security_group_rule "ingress" "$INBOUND_PROTOCOL" "$INBOUND_PORTS" "$INBOUND_CIDR" "$INBOUND_DESCRIPTION"
-add_security_group_rule "egress" "$OUTBOUND_PROTOCOL" "$OUTBOUND_PORTS" "$OUTBOUND_CIDR" "$OUTBOUND_DESCRIPTION"
+for i in "${!SECURITY_GROUP_NAMES[@]}"; do
+    create_security_group "${SECURITY_GROUP_NAMES[$i]}" \
+    "${SECURITY_GROUP_DESCRIPTIONS[$i]}"
+done
 
-create_nacl "$NACL_NAME"
+for sg_name in "${SECURITY_GROUP_NAMES[@]}"; do
+    add_security_group_rule "ingress" \
+        "${SG_INBOUND_PROTOCOL[$sg_name]}" \
+        "${SG_INBOUND_PORTS[$sg_name]}" \
+        "${SG_INBOUND_CIDR[$sg_name]}" \
+        "${SG_INBOUND_DESCRIPTION[$sg_name]}"
+    add_security_group_rule "egress" "${SG_OUTBOUND_PROTOCOL[$sg_name]}" \
+        "${SG_OUTBOUND_PORTS[$sg_name]}" \
+        "${SG_OUTBOUND_CIDR[$sg_name]}" \
+        "${SG_OUTBOUND_DESCRIPTION[$sg_name]}"
+done
+
+
+for nacl_name in "${NACL_NAMES[@]}"; do
+
+    create_nacl "$nacl_name"
+
+    add_nacl_rule \
+        "ingress" \
+        "${NACL_INBOUND_RULE_NUMBERS[$nacl_name]}" \
+        "${NACL_INBOUND_PROTOCOL[$nacl_name]}" \
+        "${NACL_INBOUND_PORTS[$nacl_name]}" \
+        "${NACL_INBOUND_CIDR[$nacl_name]}" \
+        "${NACL_INBOUND_ACTION[$nacl_name]}"
+
+    add_nacl_rule \
+        "egress" \
+        "${NACL_OUTBOUND_RULE_NUMBERS[$nacl_name]}" \
+        "${NACL_OUTBOUND_PROTOCOL[$nacl_name]}" \
+        "${NACL_OUTBOUND_PORTS[$nacl_name]}" \
+        "${NACL_OUTBOUND_CIDR[$nacl_name]}" \
+        "${NACL_OUTBOUND_ACTION[$nacl_name]}"
+
+    if [[ "$nacl_name" == *Public* ]]; then
+
+        for subnet_id in "${PUBLIC_SUBNET_IDS[@]}"; do
+            associate_nacl_with_subnet "$nacl_id" "$subnet_id"
+        done
+
+    elif [[ "$nacl_name" == *Private* ]]; then
+
+        for subnet_id in "${PRIVATE_SUBNET_IDS[@]}"; do
+            associate_nacl_with_subnet "$nacl_id" "$subnet_id"
+        done
+
+    else
+        echo "Unknown NACL type: $nacl_name" >&2
+        return 1
+    fi
+
+done
